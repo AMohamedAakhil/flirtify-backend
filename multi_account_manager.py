@@ -7,14 +7,17 @@ from database import DatabaseManager, FanvueAccount
 from fanvue_responder_enhanced import EnhancedFanvueAutoResponder
 
 class MultiAccountManager:
-    def __init__(self, llm_config: dict):
+    def __init__(self, llm_config: dict, polling_interval: int = 45):
         """
         Initialize the Multi-Account Manager
         
         Args:
             llm_config: Dictionary containing LLM configuration
+            polling_interval: Seconds between each polling cycle (default: 45)
+                             With 100 req/min limit, 45s allows ~22 requests per cycle
         """
         self.llm_config = llm_config
+        self.polling_interval = polling_interval
         self.db_manager = DatabaseManager()
         self.responders: Dict[str, EnhancedFanvueAutoResponder] = {}
         self.running_tasks: Dict[str, asyncio.Task] = {}
@@ -24,7 +27,7 @@ class MultiAccountManager:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
-        print("🚀 Multi-Account Manager initialized")
+        print(f"🚀 Multi-Account Manager initialized (polling every {polling_interval} seconds)")
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -73,15 +76,15 @@ class MultiAccountManager:
             print(f"❌ Error creating responder for account {account.id}: {e}")
             return None
 
-    async def monitor_account_continuously(self, account: FanvueAccount):
-        """Continuously monitor a single account for new messages"""
+    async def monitor_account_continuously(self, account: FanvueAccount, polling_interval: int = 45):
+        """Continuously monitor a single account for new messages with rate limit respect"""
         responder = await self.create_responder_for_account(account)
         if not responder:
             return
         
         self.responders[account.id] = responder
         
-        print(f"🔄 Starting continuous monitoring for account {account.id}")
+        print(f"🔄 Starting monitoring for account {account.id} (checking every {polling_interval} seconds)")
         consecutive_errors = 0
         max_consecutive_errors = 5
         
@@ -92,12 +95,15 @@ class MultiAccountManager:
                     message_count = await responder.monitor_single_cycle()
                     
                     if message_count > 0:
-                        print(f"✅ Processed {message_count} message(s) for account {account.id}")
+                        print(f"✅ Processed {message_count} unanswered message(s) for account {account.id}")
                         consecutive_errors = 0  # Reset error counter on success
+                    else:
+                        print(f"📭 No unanswered messages for account {account.id}")
                     
-                    # Very brief pause to prevent excessive CPU usage
-                    # This is much shorter than the original 60-second delay
-                    await asyncio.sleep(0.1)
+                    # Wait for the polling interval before next check
+                    # This respects the 100 requests/minute API limit
+                    print(f"😴 Account {account.id} waiting {polling_interval} seconds until next check...")
+                    await asyncio.sleep(polling_interval)
                     
                 except Exception as e:
                     consecutive_errors += 1
@@ -107,8 +113,8 @@ class MultiAccountManager:
                         print(f"🚨 Too many consecutive errors for account {account.id}, stopping monitor")
                         break
                     
-                    # Wait a bit longer on errors to avoid spam
-                    await asyncio.sleep(5)
+                    # Wait longer on errors to avoid spam
+                    await asyncio.sleep(polling_interval)
                     
         except asyncio.CancelledError:
             print(f"📴 Monitor for account {account.id} was cancelled")
@@ -135,7 +141,7 @@ class MultiAccountManager:
         
         # Create and start monitoring tasks for each account
         for account in accounts:
-            task = asyncio.create_task(self.monitor_account_continuously(account))
+            task = asyncio.create_task(self.monitor_account_continuously(account, self.polling_interval))
             self.running_tasks[account.id] = task
             print(f"▶️  Started monitor for account {account.id}")
         
@@ -170,7 +176,7 @@ class MultiAccountManager:
                 for account in current_accounts:
                     if account.id in new_account_ids:
                         print(f"🆕 Found new account {account.id}, starting monitor")
-                        task = asyncio.create_task(self.monitor_account_continuously(account))
+                        task = asyncio.create_task(self.monitor_account_continuously(account, self.polling_interval))
                         self.running_tasks[account.id] = task
                 
                 # Stop monitoring for removed/expired accounts
@@ -186,7 +192,7 @@ class MultiAccountManager:
     async def run(self):
         """Main entry point to run the multi-account manager"""
         print("🌟 Starting Multi-Account Fanvue Auto Responder System")
-        print("📡 This system will monitor ALL accounts in the database continuously")
+        print(f"📡 Polling every {self.polling_interval} seconds (respects 100 req/min API limit)")
         print("🔄 New accounts will be detected automatically every 5 minutes")
         print("Press Ctrl+C to stop gracefully\n")
         
@@ -215,8 +221,12 @@ def main():
         "temperature": 0.7
     }
     
+    # Polling interval in seconds (45s is safe for 100 req/min limit)
+    # You can adjust this: 30s = more responsive, 60s = more conservative
+    POLLING_INTERVAL = 10
+    
     # Create and run the manager
-    manager = MultiAccountManager(LLM_CONFIG)
+    manager = MultiAccountManager(LLM_CONFIG, POLLING_INTERVAL)
     
     try:
         asyncio.run(manager.run())

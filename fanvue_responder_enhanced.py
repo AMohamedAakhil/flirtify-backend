@@ -89,29 +89,38 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
             return {}
 
     async def get_subscribers(self) -> List[dict]:
-        """Get all subscribers"""
+        """Get all subscribers with rate limit handling"""
         try:
             all_subscribers = []
             page = 1
             loop = asyncio.get_event_loop()
             
             while True:
-                response = await loop.run_in_executor(
-                    None,
-                    lambda p=page: requests.get(f"https://api.fanvue.com/subscribers?page={p}", headers=self.headers)
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                subscribers = data.get("data", [])
-                all_subscribers.extend(subscribers)
-                
-                # Check if there are more pages
-                pagination = data.get("pagination", {})
-                if not pagination.get("hasMore", False):
-                    break
+                try:
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda p=page: requests.get(f"https://api.fanvue.com/subscribers?page={p}", headers=self.headers)
+                    )
+                    response.raise_for_status()
+                    data = response.json()
                     
-                page += 1
+                    subscribers = data.get("data", [])
+                    all_subscribers.extend(subscribers)
+                    
+                    # Check if there are more pages
+                    pagination = data.get("pagination", {})
+                    if not pagination.get("hasMore", False):
+                        break
+                        
+                    page += 1
+                    
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 429:
+                        print(f"⏳ Rate limit hit for account {self.account.id}, waiting 60 seconds...")
+                        await asyncio.sleep(60)
+                        continue  # Retry the same page
+                    else:
+                        raise  # Re-raise non-429 errors
             
             print(f"👥 Found {len(all_subscribers)} subscribers (Account: {self.account.id})")
             return all_subscribers
@@ -121,41 +130,75 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
             return []
 
     async def get_chat_messages(self, user_uuid: str, limit: int = 20) -> List[dict]:
-        """Get recent messages from a chat"""
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: requests.get(
-                    f"https://api.fanvue.com/chats/{user_uuid}/messages?page=1&limit={limit}", 
-                    headers=self.headers
+        """Get recent messages from a chat with rate limit handling"""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.get(
+                        f"https://api.fanvue.com/chats/{user_uuid}/messages?page=1&limit={limit}", 
+                        headers=self.headers
+                    )
                 )
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("data", [])
-        except Exception as e:
-            print(f"❌ Error getting messages for {user_uuid} (Account: {self.account.id}): {e}")
-            return []
+                response.raise_for_status()
+                data = response.json()
+                return data.get("data", [])
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    retry_count += 1
+                    print(f"⏳ Rate limit hit getting messages for {user_uuid} (Account: {self.account.id}), waiting 60 seconds... (Retry {retry_count}/{max_retries})")
+                    await asyncio.sleep(60)
+                    continue
+                else:
+                    print(f"❌ Error getting messages for {user_uuid} (Account: {self.account.id}): {e}")
+                    return []
+            except Exception as e:
+                print(f"❌ Error getting messages for {user_uuid} (Account: {self.account.id}): {e}")
+                return []
+        
+        print(f"❌ Max retries exceeded for getting messages for {user_uuid} (Account: {self.account.id})")
+        return []
 
     async def send_message(self, user_uuid: str, text: str) -> bool:
-        """Send a message to a user"""
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: requests.post(
-                    f"https://api.fanvue.com/chats/{user_uuid}/message",
-                    headers=self.headers,
-                    json={"text": text}
+        """Send a message to a user with rate limit handling"""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.post(
+                        f"https://api.fanvue.com/chats/{user_uuid}/message",
+                        headers=self.headers,
+                        json={"text": text}
+                    )
                 )
-            )
-            response.raise_for_status()
-            print(f"📤 Sent message to {user_uuid} (Account: {self.account.id})")
-            return True
-        except Exception as e:
-            print(f"❌ Error sending message to {user_uuid} (Account: {self.account.id}): {e}")
-            return False
+                response.raise_for_status()
+                print(f"📤 Sent message to {user_uuid} (Account: {self.account.id})")
+                return True
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    retry_count += 1
+                    print(f"⏳ Rate limit hit sending message to {user_uuid} (Account: {self.account.id}), waiting 60 seconds... (Retry {retry_count}/{max_retries})")
+                    await asyncio.sleep(60)
+                    continue
+                else:
+                    print(f"❌ Error sending message to {user_uuid} (Account: {self.account.id}): {e}")
+                    return False
+            except Exception as e:
+                print(f"❌ Error sending message to {user_uuid} (Account: {self.account.id}): {e}")
+                return False
+        
+        print(f"❌ Max retries exceeded for sending message to {user_uuid} (Account: {self.account.id})")
+        return False
 
     async def generate_response_with_llm(self, user_message: str, user_handle: str, context: str = "") -> str:
         """Generate an AI response using the account's custom system prompt"""
@@ -206,25 +249,28 @@ Response:"""
             print(f"❌ Error generating AI response for account {self.account.id}: {e}")
             return f"Thank you for your message, {user_handle}! I appreciate you reaching out. How are you doing today? 💕"
 
-    async def check_for_new_messages(self, subscriber: dict) -> List[dict]:
-        """Check for new messages from a subscriber"""
+    async def check_for_unanswered_messages(self, subscriber: dict) -> List[dict]:
+        """Check for unanswered messages from a subscriber"""
         user_uuid = subscriber["uuid"]
         user_handle = subscriber.get("handle", "Unknown")
         
         # Get recent messages
-        messages = await self.get_chat_messages(user_uuid, limit=10)
+        messages = await self.get_chat_messages(user_uuid, limit=20)
         
         if not messages:
             return []
 
-        # Filter for new messages from the subscriber (not from us)
+        # Filter for unanswered messages from the subscriber
         current_user = await self.get_current_user()
         my_uuid = current_user.get("uuid", "")
         
-        new_messages = []
-        last_timestamp = self.last_message_timestamps.get(user_uuid, "1970-01-01T00:00:00Z")
+        # Sort messages by timestamp to process in chronological order
+        messages.sort(key=lambda x: x.get("sentAt", ""))
         
-        for message in messages:
+        unanswered_messages = []
+        
+        # Find messages from subscriber that don't have a response from us after them
+        for i, message in enumerate(messages):
             message_id = message.get("uuid", "")
             sender_uuid = message.get("sender", {}).get("uuid", "")
             message_timestamp = message.get("sentAt", "")
@@ -232,10 +278,24 @@ Response:"""
             # Skip if it's our own message or already processed
             if sender_uuid == my_uuid or message_id in self.processed_messages:
                 continue
+            
+            # Check if this subscriber message has been answered
+            is_answered = False
+            
+            # Look for any message from us after this subscriber message
+            for j in range(i + 1, len(messages)):
+                later_message = messages[j]
+                later_sender_uuid = later_message.get("sender", {}).get("uuid", "")
+                later_timestamp = later_message.get("sentAt", "")
                 
-            # Check if message is newer than our last recorded timestamp
-            if message_timestamp > last_timestamp:
-                new_messages.append(message)
+                # If we sent a message after this subscriber message, it's answered
+                if later_sender_uuid == my_uuid and later_timestamp > message_timestamp:
+                    is_answered = True
+                    break
+            
+            # If not answered, add to unanswered list
+            if not is_answered:
+                unanswered_messages.append(message)
                 self.processed_messages.add(message_id)
         
         # Update last timestamp with the newest message timestamp
@@ -243,10 +303,10 @@ Response:"""
             newest_timestamp = max(msg.get("sentAt", "") for msg in messages)
             self.last_message_timestamps[user_uuid] = newest_timestamp
         
-        if new_messages:
-            print(f"💬 Found {len(new_messages)} new message(s) from {user_handle} (Account: {self.account.id})")
+        if unanswered_messages:
+            print(f"💬 Found {len(unanswered_messages)} unanswered message(s) from {user_handle} (Account: {self.account.id})")
         
-        return new_messages
+        return unanswered_messages
 
     async def respond_to_messages(self, subscriber: dict, new_messages: List[dict]):
         """Generate and send responses to new messages"""
@@ -275,7 +335,7 @@ Response:"""
             await asyncio.sleep(1)
 
     async def monitor_single_cycle(self) -> int:
-        """Single monitoring cycle - returns number of new messages processed"""
+        """Single monitoring cycle - returns number of unanswered messages processed"""
         try:
             # Get all subscribers
             subscribers = await self.get_subscribers()
@@ -283,16 +343,16 @@ Response:"""
             if not subscribers:
                 return 0
             
-            new_message_count = 0
+            unanswered_message_count = 0
             
-            # Check each subscriber for new messages
+            # Check each subscriber for unanswered messages
             for subscriber in subscribers:
                 try:
-                    new_messages = await self.check_for_new_messages(subscriber)
+                    unanswered_messages = await self.check_for_unanswered_messages(subscriber)
                     
-                    if new_messages:
-                        new_message_count += len(new_messages)
-                        await self.respond_to_messages(subscriber, new_messages)
+                    if unanswered_messages:
+                        unanswered_message_count += len(unanswered_messages)
+                        await self.respond_to_messages(subscriber, unanswered_messages)
                         
                 except Exception as e:
                     print(f"❌ Error processing subscriber {subscriber.get('handle', 'Unknown')} (Account: {self.account.id}): {e}")
@@ -301,7 +361,7 @@ Response:"""
             # Save state after each check
             self.save_state()
             
-            return new_message_count
+            return unanswered_message_count
             
         except Exception as e:
             print(f"❌ Error in monitoring cycle for account {self.account.id}: {e}")
