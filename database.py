@@ -8,7 +8,7 @@ DATABASE_URL = "postgres://postgres:qQH37KoLqRNPpBOUe9YOtsO42czYJKnCgsmSwmw0KX8E
 class FanvueAccount:
     def __init__(self, id: str, api_key: str, system_prompt: Optional[str], 
                  expires_at: datetime, created_at: datetime, updated_at: datetime, 
-                 user_id: str):
+                 user_id: str, llm: Optional[str] = None):
         self.id = id
         self.api_key = api_key
         self.system_prompt = system_prompt
@@ -16,6 +16,7 @@ class FanvueAccount:
         self.created_at = created_at
         self.updated_at = updated_at
         self.user_id = user_id
+        self.llm = llm
 
 class DatabaseManager:
     def __init__(self, database_url: str = DATABASE_URL):
@@ -52,7 +53,7 @@ class DatabaseManager:
                 # Get all accounts that haven't expired
                 query = """
                     SELECT id, "apiKey", "systemPrompt", "expiresAt", 
-                           "createdAt", "updatedAt", "userId"
+                           "createdAt", "updatedAt", "userId", llm
                     FROM "FanvueAccount" 
                     WHERE "expiresAt" > NOW()
                     ORDER BY "createdAt" ASC
@@ -69,7 +70,8 @@ class DatabaseManager:
                         expires_at=row['expiresAt'],
                         created_at=row['createdAt'],
                         updated_at=row['updatedAt'],
-                        user_id=row['userId']
+                        user_id=row['userId'],
+                        llm=row['llm']
                     )
                     accounts.append(account)
                 

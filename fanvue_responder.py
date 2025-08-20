@@ -201,49 +201,92 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
         return False
 
     async def generate_response_with_llm(self, user_message: str, user_handle: str, context: str = "") -> str:
-        """Generate an AI response using the account's custom system prompt"""
+        """Generate an AI response using Fal AI and the account's custom system prompt"""
         try:
-            # Use the custom system prompt from the database
-            prompt = f"""{self.system_prompt}
-
-Recent message from {user_handle}: "{user_message}"
+            # Use the account's custom LLM model if specified, otherwise use default
+            model = self.account.llm if self.account.llm else "google/gemini-2.0-flash-001"
+            
+            # Prepare the prompt using the custom system prompt from the database
+            user_prompt = f"""Recent message from {user_handle}: "{user_message}"
 
 Context: {context}
 
 Response:"""
 
-            # Prepare the request to your LLM endpoint
-            llm_headers = {
-                "Authorization": f"Bearer {self.llm_config['api_key']}",
+            # Prepare the request to Fal AI
+            fal_headers = {
+                "Authorization": f"Key {self.llm_config['fal_api_key']}",
                 "Content-Type": "application/json"
             }
             
             payload = {
-                "model": self.llm_config["model"],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "temperature": self.llm_config["temperature"],
-                "max_tokens": 150
+                "prompt": user_prompt,
+                "system_prompt": self.system_prompt,
+                "model": model,
+                "reasoning": False
             }
             
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
+            
+            # Submit request to Fal AI queue
+            submit_response = await loop.run_in_executor(
                 None,
                 lambda: requests.post(
-                    f"{self.llm_config['base_url']}/chat/completions",
-                    headers=llm_headers,
+                    "https://queue.fal.run/fal-ai/any-llm",
+                    headers=fal_headers,
                     json=payload,
                     timeout=30
                 )
             )
-            response.raise_for_status()
+            submit_response.raise_for_status()
             
-            result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
+            submit_result = submit_response.json()
+            request_id = submit_result["request_id"]
+            
+            # Poll for completion
+            max_wait_time = 60  # Maximum wait time in seconds
+            poll_interval = 2   # Poll every 2 seconds
+            waited_time = 0
+            
+            while waited_time < max_wait_time:
+                status_response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.get(
+                        f"https://queue.fal.run/fal-ai/any-llm/requests/{request_id}/status",
+                        headers=fal_headers,
+                        timeout=10
+                    )
+                )
+                status_response.raise_for_status()
+                status_result = status_response.json()
+                
+                if status_result["status"] == "COMPLETED":
+                    # Get the final result
+                    result_response = await loop.run_in_executor(
+                        None,
+                        lambda: requests.get(
+                            f"https://queue.fal.run/fal-ai/any-llm/requests/{request_id}",
+                            headers=fal_headers,
+                            timeout=10
+                        )
+                    )
+                    result_response.raise_for_status()
+                    final_result = result_response.json()
+                    
+                    if final_result.get("error"):
+                        raise Exception(f"Fal AI error: {final_result['error']}")
+                    
+                    return final_result["output"].strip()
+                
+                elif status_result["status"] == "FAILED":
+                    raise Exception("Fal AI request failed")
+                
+                # Wait before polling again
+                await asyncio.sleep(poll_interval)
+                waited_time += poll_interval
+            
+            # If we reach here, the request timed out
+            raise Exception("Fal AI request timed out")
             
         except Exception as e:
             print(f"❌ Error generating AI response for account {self.account.id}: {e}")
