@@ -4,16 +4,17 @@ import os
 import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
-from database import FanvueAccount
+from database import FanvueAccount, DatabaseManager
 
 class EnhancedFanvueAutoResponder:
-    def __init__(self, account: FanvueAccount, llm_config: dict):
+    def __init__(self, account: FanvueAccount, llm_config: dict, db_manager: DatabaseManager):
         """
         Initialize the Enhanced Fanvue Auto Responder for a specific account
         
         Args:
             account: FanvueAccount object containing API key and system prompt
             llm_config: Dictionary containing LLM configuration
+            db_manager: DatabaseManager instance for fetching latest account settings
         """
         self.account = account
         self.api_key = account.api_key
@@ -24,8 +25,9 @@ class EnhancedFanvueAutoResponder:
             "X-Fanvue-API-Version": "2025-06-26"
         }
         
-        # LLM configuration
+        # LLM configuration and database manager
         self.llm_config = llm_config
+        self.db_manager = db_manager
         
         # Storage for tracking message states
         self.last_message_timestamps: Dict[str, str] = {}
@@ -203,11 +205,23 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
     async def generate_response_with_llm(self, user_message: str, user_handle: str, context: str = "") -> str:
         """Generate an AI response using Fal AI and the account's custom system prompt"""
         try:
-            # Use the account's custom LLM model if specified, otherwise use default
-            model = self.account.llm if self.account.llm else "google/gemini-2.0-flash-001"
+            # Fetch latest account settings from database to get current LLM model
+            latest_account = await self.db_manager.get_fanvue_account_by_id(self.account.id)
+            
+            if latest_account:
+                # Use the latest LLM setting from database, otherwise use default
+                model = latest_account.llm if latest_account.llm else "google/gemini-2.0-flash-001"
+                # Also update system prompt if it was changed
+                current_system_prompt = latest_account.system_prompt or self.get_default_system_prompt()
+            else:
+                # Fallback to cached account data if database fetch fails
+                model = self.account.llm if self.account.llm else "google/gemini-2.0-flash-001"
+                current_system_prompt = self.system_prompt
+                print(f"⚠️ Could not fetch latest account settings, using cached data (Account: {self.account.id})")
+            
             print(f"🤖 Using LLM model: {model} (Account: {self.account.id})")
             
-            # Prepare the prompt using the custom system prompt from the database
+            # Prepare the prompt using the current system prompt from the database
             user_prompt = f"""Recent message from {user_handle}: "{user_message}"
 
 Context: {context}
@@ -222,7 +236,7 @@ Response:"""
             
             payload = {
                 "prompt": user_prompt,
-                "system_prompt": self.system_prompt,
+                "system_prompt": current_system_prompt,
                 "model": model,
                 "reasoning": False
             }

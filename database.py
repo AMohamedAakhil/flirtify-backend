@@ -101,3 +101,36 @@ class DatabaseManager:
         except Exception as e:
             print(f"❌ Error checking account existence: {e}")
             return False
+
+    async def get_fanvue_account_by_id(self, account_id: str) -> Optional[FanvueAccount]:
+        """Fetch a specific Fanvue account by ID to get latest settings"""
+        if not self.pool:
+            await self.connect()
+        
+        try:
+            async with self.pool.acquire() as connection:
+                query = """
+                    SELECT id, "apiKey", "systemPrompt", "expiresAt", 
+                           "createdAt", "updatedAt", "userId", llm
+                    FROM "FanvueAccount" 
+                    WHERE id = $1 AND "expiresAt" > NOW()
+                """
+                
+                row = await connection.fetchrow(query, account_id)
+                
+                if row:
+                    return FanvueAccount(
+                        id=row['id'],
+                        api_key=row['apiKey'],
+                        system_prompt=row['systemPrompt'],
+                        expires_at=row['expiresAt'],
+                        created_at=row['createdAt'],
+                        updated_at=row['updatedAt'],
+                        user_id=row['userId'],
+                        llm=row['llm']
+                    )
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error fetching account by ID {account_id}: {e}")
+            return None

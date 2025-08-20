@@ -70,7 +70,7 @@ class MultiAccountManager:
     async def create_responder_for_account(self, account: FanvueAccount) -> EnhancedFanvueAutoResponder:
         """Create a responder instance for a specific account"""
         try:
-            responder = EnhancedFanvueAutoResponder(account, self.llm_config)
+            responder = EnhancedFanvueAutoResponder(account, self.llm_config, self.db_manager)
             return responder
         except Exception as e:
             print(f"❌ Error creating responder for account {account.id}: {e}")
