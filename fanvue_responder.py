@@ -202,6 +202,46 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
         print(f"❌ Max retries exceeded for sending message to {user_uuid} (Account: {self.account.id})")
         return False
 
+    async def build_conversation_context(self, chat_history: List[dict], user_handle: str) -> str:
+        """Build conversation context from chat history"""
+        try:
+            if not chat_history:
+                return "This is the start of your conversation."
+            
+            # Get current user info to identify our messages
+            current_user = await self.get_current_user()
+            my_uuid = current_user.get("uuid", "")
+            
+            # Sort messages by timestamp (oldest first)
+            sorted_messages = sorted(chat_history, key=lambda x: x.get("sentAt", ""))
+            
+            # Build conversation context (limit to last 20 messages to avoid token limits)
+            conversation_lines = []
+            recent_messages = sorted_messages[-20:] if len(sorted_messages) > 20 else sorted_messages
+            
+            for msg in recent_messages:
+                sender_uuid = msg.get("sender", {}).get("uuid", "")
+                text = msg.get("text", "").strip()
+                timestamp = msg.get("sentAt", "")
+                
+                if not text:
+                    continue
+                
+                if sender_uuid == my_uuid:
+                    conversation_lines.append(f"You: {text}")
+                else:
+                    conversation_lines.append(f"{user_handle}: {text}")
+            
+            if conversation_lines:
+                context = f"Conversation history:\n" + "\n".join(conversation_lines)
+                return context
+            else:
+                return "This is the start of your conversation."
+                
+        except Exception as e:
+            print(f"⚠️ Error building conversation context for account {self.account.id}: {e}")
+            return "Previous conversation context unavailable."
+
     async def generate_response_with_llm(self, user_message: str, user_handle: str, context: str = "") -> str:
         """Generate an AI response using Fal AI and the account's custom system prompt"""
         try:
@@ -221,12 +261,19 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
             
             print(f"🤖 Using LLM model: {model} (Account: {self.account.id})")
             
-            # Prepare the prompt using the current system prompt from the database
-            user_prompt = f"""Recent message from {user_handle}: "{user_message}"
+            # Prepare the prompt using the conversation context
+            if context and context != "This is the start of your conversation.":
+                user_prompt = f"""{context}
 
-Context: {context}
+{user_handle}'s latest message: "{user_message}"
 
-Response:"""
+Please respond naturally as if continuing this conversation:"""
+            else:
+                user_prompt = f"""This is the start of your conversation with {user_handle}.
+
+{user_handle} just sent: "{user_message}"
+
+Please respond in a friendly, engaging way:"""
 
             # Prepare the request to Fal AI
             fal_headers = {
@@ -371,6 +418,9 @@ Response:"""
         user_uuid = subscriber["uuid"]
         user_handle = subscriber.get("handle", "Unknown")
         
+        # Get chat history for context
+        chat_history = await self.get_chat_messages(user_uuid, limit=50)  # Get more history for context
+        
         for message in new_messages:
             message_text = message.get("text", "")
             
@@ -379,8 +429,11 @@ Response:"""
             
             print(f"📨 New message from {user_handle}: \"{message_text}\" (Account: {self.account.id})")
             
-            # Generate AI response
-            response_text = await self.generate_response_with_llm(message_text, user_handle)
+            # Build conversation context from chat history
+            conversation_context = await self.build_conversation_context(chat_history, user_handle)
+            
+            # Generate AI response with full conversation context
+            response_text = await self.generate_response_with_llm(message_text, user_handle, conversation_context)
             print(f"🤖 Generated response: \"{response_text}\" (Account: {self.account.id})")
             
             # Send the response
