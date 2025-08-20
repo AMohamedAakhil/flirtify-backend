@@ -205,6 +205,7 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
         try:
             # Use the account's custom LLM model if specified, otherwise use default
             model = self.account.llm if self.account.llm else "google/gemini-2.0-flash-001"
+            print(f"🤖 Using LLM model: {model} (Account: {self.account.id})")
             
             # Prepare the prompt using the custom system prompt from the database
             user_prompt = f"""Recent message from {user_handle}: "{user_message}"
