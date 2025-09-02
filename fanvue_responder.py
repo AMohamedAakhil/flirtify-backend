@@ -243,7 +243,7 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
             return "Previous conversation context unavailable."
 
     async def generate_response_with_llm(self, user_message: str, user_handle: str, context: str = "") -> str:
-        """Generate an AI response using Fal AI and the account's custom system prompt"""
+        """Generate an AI response using either Fal AI or OpenAI API based on the model"""
         try:
             # Fetch latest account settings from database to get current LLM model
             latest_account = await self.db_manager.get_fanvue_account_by_id(self.account.id)
@@ -275,6 +275,63 @@ Please respond naturally as if continuing this conversation:"""
 
 Please respond in a friendly, engaging way:"""
 
+            # Check if we should use stheno-nsfw (OpenAI API) or Fal AI
+            if model == "stheno-nsfw":
+                return await self.generate_response_with_openai(user_prompt, current_system_prompt)
+            else:
+                return await self.generate_response_with_fal_ai(user_prompt, current_system_prompt, model)
+            
+        except Exception as e:
+            print(f"❌ Error generating AI response for account {self.account.id}: {e}")
+            return f"Thank you for your message, {user_handle}! I appreciate you reaching out. How are you doing today? 💕"
+
+    async def generate_response_with_openai(self, user_prompt: str, system_prompt: str) -> str:
+        """Generate response using OpenAI API for stheno-nsfw model"""
+        try:
+            stheno_config = self.llm_config.get("stheno_nsfw", {})
+            
+            headers = {
+                "Authorization": f"Bearer {stheno_config['api_key']}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": stheno_config["model"],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "max_tokens": 150,
+                "temperature": 0.8
+            }
+            
+            loop = asyncio.get_event_loop()
+            
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    f"{stheno_config['base_url']}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            if "choices" in result and len(result["choices"]) > 0:
+                return result["choices"][0]["message"]["content"].strip()
+            else:
+                raise Exception("No response content from stheno-nsfw API")
+                
+        except Exception as e:
+            print(f"❌ Error with stheno-nsfw API for account {self.account.id}: {e}")
+            raise
+
+    async def generate_response_with_fal_ai(self, user_prompt: str, system_prompt: str, model: str) -> str:
+        """Generate response using Fal AI API"""
+        try:
             # Prepare the request to Fal AI
             fal_headers = {
                 "Authorization": f"Key {self.llm_config['fal_api_key']}",
@@ -283,7 +340,7 @@ Please respond in a friendly, engaging way:"""
             
             payload = {
                 "prompt": user_prompt,
-                "system_prompt": current_system_prompt,
+                "system_prompt": system_prompt,
                 "model": model,
                 "reasoning": False
             }
@@ -351,8 +408,8 @@ Please respond in a friendly, engaging way:"""
             raise Exception("Fal AI request timed out")
             
         except Exception as e:
-            print(f"❌ Error generating AI response for account {self.account.id}: {e}")
-            return f"Thank you for your message, {user_handle}! I appreciate you reaching out. How are you doing today? 💕"
+            print(f"❌ Error with Fal AI for account {self.account.id}: {e}")
+            raise
 
     async def check_for_unanswered_messages(self, subscriber: dict) -> List[dict]:
         """Check for unanswered messages from a subscriber"""

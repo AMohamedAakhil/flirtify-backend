@@ -213,10 +213,16 @@ class MultiAccountManager:
 def main():
     """Main function to start the multi-account manager"""
     
-    # Fal AI Configuration
+    # LLM Configuration
     LLM_CONFIG = {
         "fal_api_key": "00559e7d-9095-4d60-9e0f-ef8114f24a4a:88a5dc2444132d3afb6a055c0bb87d2c",
-        "default_model": "google/gemini-2.0-flash-001"
+        "default_model": "google/gemini-2.0-flash-001",
+        # Stheno NSFW Configuration (OpenAI API compatible)
+        "stheno_nsfw": {
+            "api_key": "SHHHNXH43KX5AF986LR7WEPFFILV6OKKKIT4NVSF",
+            "model": "Sao10K/L3-8B-Stheno-v3.2",
+            "base_url": "https://c40shf7xpyl0ky-8000.proxy.runpod.net/v1"
+        }
     }
     
     # Polling interval in seconds (45s is safe for 100 req/min limit)
