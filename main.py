@@ -221,7 +221,7 @@ def main():
         "stheno_nsfw": {
             "api_key": "SHHHNXH43KX5AF986LR7WEPFFILV6OKKKIT4NVSF",
             "model": "Sao10K/L3-8B-Stheno-v3.2",
-            "base_url": "https://c40shf7xpyl0ky-8000.proxy.runpod.net/v1"
+            "base_url": "https://f6cjjzlshey9im-8000.proxy.runpod.net/v1"
         }
     }
     

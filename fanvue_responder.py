@@ -429,6 +429,16 @@ Please respond in a friendly, engaging way:"""
         # Sort messages by timestamp to process in chronological order
         messages.sort(key=lambda x: x.get("sentAt", ""))
         
+        # CRITICAL: Check if the most recent message is from us
+        # If so, don't respond until the subscriber sends a new message
+        if messages:
+            most_recent_message = messages[-1]  # Last message after sorting
+            most_recent_sender = most_recent_message.get("sender", {}).get("uuid", "")
+            
+            if most_recent_sender == my_uuid:
+                print(f"🔇 Last message in conversation with {user_handle} is from us, skipping response (Account: {self.account.id})")
+                return []
+        
         unanswered_messages = []
         
         # Find messages from subscriber that don't have a response from us after them
