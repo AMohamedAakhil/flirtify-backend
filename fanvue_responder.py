@@ -37,6 +37,9 @@ class EnhancedFanvueAutoResponder:
         # Load previous state
         self.load_state()
         
+        # Clean up old processed messages (keep only recent ones to prevent memory bloat)
+        self.cleanup_old_processed_messages()
+        
         print(f"✅ Enhanced Auto Responder initialized for account {account.id}")
 
     def get_default_system_prompt(self) -> str:
@@ -64,6 +67,20 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
         except Exception as e:
             print(f"⚠️  Could not load previous state for account {self.account.id}: {e}")
 
+    def cleanup_old_processed_messages(self):
+        """Clean up old processed messages to prevent memory bloat (keep last 1000)"""
+        try:
+            if len(self.processed_messages) > 1000:
+                # Convert to list, sort, and keep only the most recent 1000
+                # Since message IDs are UUIDs, we can't sort by them meaningfully
+                # So we'll just keep a random subset of 1000
+                processed_list = list(self.processed_messages)
+                # Keep the last 1000 (assuming they were added in chronological order)
+                self.processed_messages = set(processed_list[-1000:])
+                print(f"🧹 Cleaned up old processed messages, kept {len(self.processed_messages)} recent ones (Account: {self.account.id})")
+        except Exception as e:
+            print(f"⚠️  Error cleaning up processed messages for account {self.account.id}: {e}")
+
     def save_state(self):
         """Save current message state to file"""
         try:
@@ -73,6 +90,7 @@ Be authentic, flirty when appropriate, and make each subscriber feel special."""
             }
             with open(self.state_file, 'w') as f:
                 json.dump(data, f, indent=2)
+            print(f"💾 Saved state: {len(self.processed_messages)} processed messages, {len(self.last_message_timestamps)} timestamps (Account: {self.account.id})")
         except Exception as e:
             print(f"⚠️  Could not save state for account {self.account.id}: {e}")
 
@@ -439,44 +457,51 @@ Please respond in a friendly, engaging way:"""
                 print(f"🔇 Last message in conversation with {user_handle} is from us, skipping response (Account: {self.account.id})")
                 return []
         
-        unanswered_messages = []
+        # Get the last timestamp we processed for this user
+        last_processed_timestamp = self.last_message_timestamps.get(user_uuid, "")
         
-        # Find messages from subscriber that don't have a response from us after them
-        for i, message in enumerate(messages):
+        unanswered_messages = []
+        new_subscriber_messages = []
+        
+        # First, collect only NEW messages from the subscriber (messages we haven't seen before)
+        for message in messages:
             message_id = message.get("uuid", "")
             sender_uuid = message.get("sender", {}).get("uuid", "")
             message_timestamp = message.get("sentAt", "")
+            message_text = message.get("text", "").strip()
             
-            # Skip if it's our own message or already processed
-            if sender_uuid == my_uuid or message_id in self.processed_messages:
+            # Skip if it's our own message, empty message, or already processed
+            if sender_uuid == my_uuid or not message_text or message_id in self.processed_messages:
                 continue
             
-            # Check if this subscriber message has been answered
-            is_answered = False
-            
-            # Look for any message from us after this subscriber message
-            for j in range(i + 1, len(messages)):
-                later_message = messages[j]
-                later_sender_uuid = later_message.get("sender", {}).get("uuid", "")
-                later_timestamp = later_message.get("sentAt", "")
+            # Skip if this message is older than or equal to our last processed timestamp
+            if last_processed_timestamp and message_timestamp <= last_processed_timestamp:
+                continue
                 
-                # If we sent a message after this subscriber message, it's answered
-                if later_sender_uuid == my_uuid and later_timestamp > message_timestamp:
-                    is_answered = True
-                    break
-            
-            # If not answered, add to unanswered list
-            if not is_answered:
-                unanswered_messages.append(message)
-                self.processed_messages.add(message_id)
+            # This is a new message from the subscriber
+            new_subscriber_messages.append(message)
+            print(f"📥 New message from {user_handle} (timestamp: {message_timestamp}): \"{message_text[:50]}...\" (Account: {self.account.id})")
         
-        # Update last timestamp with the newest message timestamp
+        # Only respond to the most recent NEW message from the subscriber to avoid spam
+        # This ensures we respond once per "conversation turn" from the subscriber
+        if new_subscriber_messages:
+            # Sort by timestamp and take only the most recent message
+            new_subscriber_messages.sort(key=lambda x: x.get("sentAt", ""))
+            latest_new_message = new_subscriber_messages[-1]
+            
+            # Mark this message as processed
+            message_id = latest_new_message.get("uuid", "")
+            self.processed_messages.add(message_id)
+            
+            unanswered_messages = [latest_new_message]
+            print(f"✅ Will respond to latest new message from {user_handle} (Account: {self.account.id})")
+        else:
+            print(f"ℹ️ No new messages from {user_handle} to respond to (Account: {self.account.id})")
+        
+        # Update last timestamp with the newest message timestamp (including our own messages)
         if messages:
             newest_timestamp = max(msg.get("sentAt", "") for msg in messages)
             self.last_message_timestamps[user_uuid] = newest_timestamp
-        
-        if unanswered_messages:
-            print(f"💬 Found {len(unanswered_messages)} unanswered message(s) from {user_handle} (Account: {self.account.id})")
         
         return unanswered_messages
 
